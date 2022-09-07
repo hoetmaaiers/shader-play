@@ -1,0 +1,202 @@
+# Shaders - Geoserver style calculation
+
+```elixir
+Mix.install([
+  {:color_utils, "~> 0.2.0"}
+])
+```
+
+## Configuration
+
+```elixir
+total_rgb = 255 * 256 * 256 + 255 * 256 + 255
+
+global_min = 810_404.9375
+global_max = 115_151_200
+
+0xFF0000
+```
+
+```elixir
+use Bitwise, only_operators: true
+
+defmodule ColorMapShader do
+  @total_rgb 255 * 256 * 256 + 255 * 256 + 255
+
+  def get_rgb_value(minimum, maximum, value) do
+    pct = (value - minimum) / (maximum - minimum)
+    number_to_colour(round(@total_rgb * pct))
+  end
+
+  def get_pixel_value(rgb, global_min, global_max) do
+    value = colour_to_number(rgb)
+    pct = (value - 0) / (@total_rgb - 0)
+    pct * (global_max - global_min) + global_min
+  end
+
+  def number_to_colour(number) do
+    red = (number &&& 0xFF0000) >>> 16
+    green = (number &&& 0x00FF00) >>> 8
+    blue = number &&& 0x0000FF
+
+    {red, green, blue}
+    # // or eg. return `rgb(${r},${g},${b})`;
+  end
+
+  def colour_to_number({red, green, blue}) do
+    (red <<< 16) + (green <<< 8) + blue
+  end
+
+  def rgb_to_hex(rgb) do
+    {red, green, blue} = rgb
+    "#" <> decimal_to_hex(red) <> decimal_to_hex(green) <> decimal_to_hex(blue)
+  end
+
+  def decimal_to_hex(decimal) do
+    decimal |> Integer.to_string(16) |> String.pad_leading(2, "0")
+  end
+
+  def color_map_entry(value, rgb) do
+    "<sld:ColorMapEntry label=\"#{value}\" color=\"#{rgb_to_hex(rgb)}\" quantity=\"#{value}\" />"
+  end
+end
+
+defmodule ColorMap do
+  def get_color_map(name, min, max, steps \\ 255) do
+    step = (max - min) / steps
+
+    stepped_result =
+      1..steps
+      |> Enum.map(fn i ->
+        value = step * i + min
+        rgb_value = ColorMapShader.get_rgb_value(min, max, value)
+
+        %{
+          rgb: rgb_value,
+          value: value,
+          validation: ColorMapShader.get_pixel_value(rgb_value, min, max)
+        }
+      end)
+
+    min_step = %{rgb: ColorMapShader.get_rgb_value(min, max, min), value: min}
+
+    color_list = [min_step] ++ stepped_result
+
+    IO.inspect(color_list)
+
+    """
+    <?xml version="1.0" encoding="UTF-8"?>
+    <StyledLayerDescriptor xmlns="http://www.opengis.net/sld" xmlns:ogc="http://www.opengis.net/ogc" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" version="1.0.0" xsi:schemaLocation="http://www.opengis.net/sld StyledLayerDescriptor.xsd">
+      <NamedLayer>
+        <Name>#{name}</Name>
+        <UserStyle>
+          <Title>shader sld</Title>
+          <FeatureTypeStyle>
+            <Rule>
+              <RasterSymbolizer>
+                <ColorMap type="ramp" extended="true">
+                  #{Enum.map(color_list, fn color_item -> get_color_map_entry(color_item) end)}
+                </ColorMap>
+              </RasterSymbolizer>
+            </Rule>
+          </FeatureTypeStyle>
+        </UserStyle>
+      </NamedLayer>
+    </StyledLayerDescriptor>
+    """
+  end
+
+  def get_color_map_entry(color_item) do
+    ~s/<ColorMapEntry label="#{color_item.value}" color="#{rgb_to_hex(color_item.rgb)}" quantity="#{color_item.value}" \/>/
+  end
+
+  def rgb_to_hex(rgb) do
+    {red, green, blue} = rgb
+    "#" <> decimal_to_hex(red) <> decimal_to_hex(green) <> decimal_to_hex(blue)
+  end
+
+  def decimal_to_hex(decimal) do
+    decimal |> Integer.to_string(16) |> String.pad_leading(2, "0")
+  end
+end
+```
+
+```elixir
+colormap = ColorMap.get_color_map("test", 0, 800)
+# colormap |> String.split("\n") |> Enum.each(&IO.puts(&1))
+
+maps = [
+  %{
+    name: "source_p-t-all-all-50-bruto_2010",
+    min: 2.0e-06,
+    # max: 21429.550781
+
+    # # quantile: 0.0001
+    # min: 0.000396,
+    # # quantile 0.9999
+    max: 107.795595
+  },
+  %{
+    name: "source_p-t-all-all-250-bruto_2010",
+    min: 0,
+    max: 857.325928
+
+    # quantile: 0.0001
+    # min: 0.000396,
+    # quantile 0.9995
+    # max: 31.463126
+  },
+  %{
+    name: "source_p-t-all-all-500-bruto_2010",
+    min: 0,
+    max: 214.442642
+    # # quantile: 0.0001
+    # min: 0.000137,
+    # # quantile 0.9995
+    # max: 33.148535
+  }
+]
+
+Enum.each(maps, fn map ->
+  colormap = ColorMap.get_color_map(map.name, map.min, map.max)
+
+  IO.puts("""
+  ------START--------------------------------------------------------
+  Map name: #{map.name}
+
+  #{colormap}
+
+  ------END----------------------------------------------------------
+  """)
+end)
+```
+
+```elixir
+# Enum.each(result, fn row -> IO.puts(Shader.color_map_entry(row.value, row.rgb)) end)
+
+
+hex = [
+  "#ffffb2",
+  "#ffeb90",
+  "#ffd76d",
+  "#fec055",
+  "#fea649",
+  "#fd8d3c",
+  "#f86c30",
+  "#f34b25",
+  "#e62f21",
+  "#d21723",
+  "#bd0026"
+]
+
+Enum.map(hex, fn item -> 
+  [_, digits] = String.split(item, ~r/#/)
+  digits = String.upcase digits
+  %{red: red, green: green, blue: blue} = ColorUtils.hex_to_rgb(digits)
+  IO.puts "#{trunc red}, #{trunc green}, #{trunc blue}"
+
+end)
+
+})
+
+```
